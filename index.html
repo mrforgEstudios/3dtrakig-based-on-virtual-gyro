@@ -2,185 +2,191 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gyro Tracker to GLB</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gyro to GLB Tracker</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background-color: #121212; color: white; font-family: sans-serif; }
-        .recording { animation: pulse 1.5s infinite; }
-        @keyframes pulse {
-            0% { background-color: #ef4444; }
-            50% { background-color: #7f1d1d; }
-            100% { background-color: #ef4444; }
+        body { background-color: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; touch-action: manipulation; }
+        .rec-active { animation: pulse-red 1s infinite; background-color: #dc2626 !important; }
+        @keyframes pulse-red {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); box-shadow: 0 0 20px rgba(220, 38, 38, 0.5); }
+            100% { transform: scale(1); }
         }
     </style>
 </head>
-<body class="flex flex-col items-center justify-center min-h-screen p-4">
+<body class="flex flex-col items-center justify-between min-h-screen p-6">
 
-    <div class="text-center mb-8">
-        <h1 class="text-2xl font-bold mb-2">Gyro Tracker 📱</h1>
-        <p class="text-gray-400 text-sm">Запись вращения для Reconn 4D (glTF)</p>
+    <div class="w-full text-center py-4">
+        <h1 class="text-3xl font-black tracking-tight text-blue-400">GYRO TRACK</h1>
+        <p class="text-slate-400 text-xs uppercase tracking-widest mt-1">Export to Reconn 4D</p>
     </div>
 
-    <!-- Визуализация ориентации -->
-    <div id="canvas-container" class="w-64 h-64 bg-gray-800 rounded-xl mb-8 border border-gray-700 shadow-lg"></div>
+    <!-- Визуальное превью -->
+    <div id="canvas-container" class="relative w-full aspect-square max-w-sm bg-slate-900 rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl">
+        <div id="overlay" class="absolute inset-0 flex items-center justify-center text-slate-600 text-center p-8 pointer-events-none">
+            Камера появится после активации датчиков
+        </div>
+    </div>
 
-    <div class="flex flex-col gap-4 w-full max-w-xs">
-        <button id="startBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-lg transition-all">
-            Разрешить датчики
+    <div id="ui-controls" class="w-full max-w-xs space-y-4 mb-8">
+        <button id="startBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-5 rounded-2xl shadow-lg transition-all active:scale-95">
+            1. Активировать Гироскоп
         </button>
         
-        <button id="recordBtn" disabled class="bg-gray-600 text-white font-bold py-4 px-6 rounded-lg opacity-50 cursor-not-allowed transition-all">
-            Начать запись
+        <button id="recordBtn" disabled class="w-full bg-slate-700 text-slate-400 font-bold py-5 rounded-2xl opacity-50 cursor-not-allowed transition-all">
+            2. Начать запись
         </button>
 
-        <button id="downloadBtn" disabled class="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-6 rounded-lg hidden transition-all">
-            Скачать .GLB
+        <button id="downloadBtn" class="hidden w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-5 rounded-2xl shadow-xl transition-all active:scale-95">
+            3. Сохранить .GLB
         </button>
     </div>
 
-    <div id="status" class="mt-6 text-sm text-gray-500 italic">Ожидание разрешений...</div>
+    <div id="status-bar" class="w-full bg-slate-900 p-4 rounded-t-3xl border-t border-slate-800 text-center">
+        <span id="status-text" class="text-sm text-slate-500 uppercase font-medium">Ожидание...</span>
+    </div>
 
     <script>
         let scene, camera, renderer, phoneMesh;
         let isRecording = false;
         let recordedData = [];
         let startTime = 0;
-        const clock = new THREE.Clock();
 
-        // Инициализация Three.js для визуализации
         function initThree() {
+            document.getElementById('overlay').style.display = 'none';
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(256, 256);
-            document.getElementById('canvas-container').appendChild(renderer.domElement);
+            const container = document.getElementById('canvas-container');
+            renderer.setSize(container.clientWidth, container.clientWidth);
+            container.appendChild(renderer.domElement);
 
-            // Создаем модель "телефона"
-            const geometry = new THREE.BoxGeometry(1, 1.8, 0.1);
-            const material = new THREE.MeshStandardMaterial({ color: 0x3b82f6 });
-            phoneMesh = new THREE.Mesh(geometry, material);
+            const geometry = new THREE.BoxGeometry(1, 1.8, 0.15);
+            const materials = [
+                new THREE.MeshStandardMaterial({color: 0x1e293b}), // right
+                new THREE.MeshStandardMaterial({color: 0x1e293b}), // left
+                new THREE.MeshStandardMaterial({color: 0x1e293b}), // top
+                new THREE.MeshStandardMaterial({color: 0x1e293b}), // bottom
+                new THREE.MeshStandardMaterial({color: 0x3b82f6}), // front (экран)
+                new THREE.MeshStandardMaterial({color: 0x0f172a})  // back
+            ];
+            phoneMesh = new THREE.Mesh(geometry, materials);
             scene.add(phoneMesh);
 
-            const light = new THREE.DirectionalLight(0xffffff, 1);
-            light.position.set(1, 1, 2);
-            scene.add(light);
-            scene.add(new THREE.AmbientLight(0x404040));
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambient);
+            const direct = new THREE.DirectionalLight(0xffffff, 0.8);
+            direct.position.set(5, 5, 5);
+            scene.add(direct);
 
             camera.position.z = 3;
-            animate();
+            renderLoop();
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
             renderer.render(scene, camera);
         }
 
         const startBtn = document.getElementById('startBtn');
         const recordBtn = document.getElementById('recordBtn');
         const downloadBtn = document.getElementById('downloadBtn');
-        const status = document.getElementById('status');
+        const statusText = document.getElementById('status-text');
 
-        // Запрос разрешений (нужен для iOS и последних Android)
         startBtn.onclick = async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                try {
-                    const response = await DeviceOrientationEvent.requestPermission();
-                    if (response === 'granted') {
-                        setupTracker();
-                    }
-                } catch (e) {
-                    status.innerText = "Ошибка доступа к датчикам";
-                }
+                const permission = await DeviceOrientationEvent.requestPermission();
+                if (permission === 'granted') startTracking();
             } else {
-                // Обычный Android
-                setupTracker();
+                startTracking();
             }
         };
 
-        function setupTracker() {
-            window.addEventListener('deviceorientation', handleOrientation);
+        function startTracking() {
+            window.addEventListener('deviceorientation', (e) => {
+                const alpha = e.alpha ? THREE.MathUtils.degToRad(e.alpha) : 0;
+                const beta = e.beta ? THREE.MathUtils.degToRad(e.beta) : 0;
+                const gamma = e.gamma ? THREE.MathUtils.degToRad(e.gamma) : 0;
+                
+                // Исправляем ориентацию для мобильных устройств
+                if (phoneMesh) {
+                    phoneMesh.rotation.set(beta, alpha, -gamma, 'YXZ');
+                    if (isRecording) {
+                        recordedData.push({
+                            time: (performance.now() - startTime) / 1000,
+                            q: phoneMesh.quaternion.clone()
+                        });
+                    }
+                }
+            });
+
             startBtn.classList.add('hidden');
             recordBtn.disabled = false;
-            recordBtn.classList.replace('bg-gray-600', 'bg-red-600');
+            recordBtn.classList.replace('bg-slate-700', 'bg-red-600');
             recordBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-            status.innerText = "Датчики активны. Готов к записи.";
+            statusText.innerText = "Готов к записи";
             initThree();
-        }
-
-        function handleOrientation(event) {
-            // Превращаем углы Эйлера в радианы
-            const alpha = event.alpha ? THREE.MathUtils.degToRad(event.alpha) : 0; // Z
-            const beta = event.beta ? THREE.MathUtils.degToRad(event.beta) : 0;   // X
-            const gamma = event.gamma ? THREE.MathUtils.degToRad(event.gamma) : 0; // Y
-
-            // В Three.js порядок вращения для устройств обычно YXZ или ZXY
-            phoneMesh.rotation.set(beta, alpha, -gamma, 'YXZ');
-
-            if (isRecording) {
-                const timestamp = (performance.now() - startTime) / 1000;
-                recordedData.push({
-                    time: timestamp,
-                    rotation: phoneMesh.quaternion.clone()
-                });
-            }
         }
 
         recordBtn.onclick = () => {
             if (!isRecording) {
-                // Старт записи
                 isRecording = true;
                 recordedData = [];
                 startTime = performance.now();
                 recordBtn.innerText = "Остановить";
-                recordBtn.classList.add('recording');
+                recordBtn.classList.add('rec-active');
                 downloadBtn.classList.add('hidden');
-                status.innerText = "Идет запись движений...";
+                statusText.innerText = "Запись...";
             } else {
-                // Стоп записи
                 isRecording = false;
                 recordBtn.innerText = "Начать заново";
-                recordBtn.classList.remove('recording');
+                recordBtn.classList.remove('rec-active');
                 downloadBtn.classList.remove('hidden');
-                status.innerText = `Записано ${recordedData.length} кадров.`;
+                statusText.innerText = `Готово: ${recordedData.length} кадров`;
             }
         };
 
         downloadBtn.onclick = () => {
-            exportToGLB();
-        };
-
-        function exportToGLB() {
-            status.innerText = "Сборка файла...";
+            statusText.innerText = "Генерация GLB...";
             
-            // Создаем новую сцену для экспорта
             const exportScene = new THREE.Scene();
-            const exportCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
-            exportCamera.name = "TrackedCamera";
-            exportScene.add(exportCamera);
+            const trackCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+            trackCamera.name = "GyroCamera"; // Reconn 4D увидит это имя
+            exportScene.add(trackCamera);
 
-            // Создаем анимацию
             const times = recordedData.map(d => d.time);
             const values = [];
             recordedData.forEach(d => {
-                values.push(d.rotation.x, d.rotation.y, d.rotation.z, d.rotation.w);
+                values.push(d.q.x, d.q.y, d.q.z, d.q.w);
             });
 
-            const track = new THREE.QuaternionKeyframeTrack('TrackedCamera.quaternion', times, values);
-            const clip = new THREE.AnimationClip('CameraAction', -1, [track]);
+            const track = new THREE.QuaternionKeyframeTrack('GyroCamera.quaternion', times, values);
+            const clip = new THREE.AnimationClip('Action', -1, [track]);
 
             const exporter = new THREE.GLTFExporter();
-            exporter.parse(exportScene, (gltf) => {
-                const blob = new Blob([JSON.stringify(gltf)], { type: 'application/json' });
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = `camera_track_${Date.now()}.gltf`;
-                link.click();
-                status.innerText = "Готово! Импортируйте файл в Reconn 4D.";
-            }, { animations: [clip] });
-        }
+            // Используем бинарный формат (binary: true), он надежнее для скачивания
+            exporter.parse(exportScene, (result) => {
+                const blob = new Blob([result], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = `track_${Math.floor(Date.now()/1000)}.glb`;
+                document.body.appendChild(a);
+                a.click();
+                
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    statusText.innerText = "Файл сохранен";
+                }, 100);
+                
+            }, { binary: true, animations: [clip] });
+        };
     </script>
 </body>
 </html>
