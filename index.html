@@ -20,20 +20,19 @@
 <body class="flex flex-col items-center justify-between min-h-screen p-4">
 
     <div class="w-full text-center py-2">
-        <h1 class="text-2xl font-black tracking-tight text-blue-400 italic">GYRO TRACK V2.1</h1>
-        <p class="text-slate-500 text-[10px] uppercase tracking-widest">Zero-Start & Camera Helper</p>
+        <h1 class="text-2xl font-black tracking-tight text-blue-400 italic">GYRO TRACK V2.2</h1>
+        <p class="text-slate-500 text-[10px] uppercase tracking-widest">Fixed Diagonal Rotation & Helper</p>
     </div>
 
-    <!-- Визуальное превью -->
     <div id="canvas-container" class="relative w-full flex-grow max-w-sm bg-slate-900 rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl my-4">
         <div id="overlay" class="absolute inset-0 flex items-center justify-center text-slate-600 text-center p-8 pointer-events-none z-10 text-sm">
-            Нажмите "Активировать", чтобы увидеть гимбал
+            Нажмите "Активировать" для калибровки
         </div>
     </div>
 
     <div id="ui-controls" class="w-full max-w-xs space-y-3 mb-4">
         <button id="startBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95">
-            1. Активировать гироскоп
+            1. Активировать датчики
         </button>
         
         <button id="recordBtn" disabled class="w-full bg-slate-700 text-slate-400 font-bold py-4 rounded-2xl opacity-50 cursor-not-allowed transition-all">
@@ -55,8 +54,11 @@
         let isRecording = false;
         let recordedData = [];
         let startTime = 0;
+        
+        // Математика для стабилизации
         let initialQuaternion = new THREE.Quaternion();
-        let currentRawQuaternion = new THREE.Quaternion();
+        let currentQuaternion = new THREE.Quaternion();
+        const worldQuaternion = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // Поворот для выравнивания осей устройства с миром Three.js
 
         const MAX_TRAIL_POINTS = 100;
         let trailPoints = [];
@@ -74,7 +76,7 @@
             phoneGroup = new THREE.Group();
             scene.add(phoneGroup);
 
-            // Визуальный гимбал (оси)
+            // Визуальный гимбал
             gimbalAxes = new THREE.Group();
             const axisLength = 1.2;
             const xLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(axisLength,0,0)]), new THREE.LineBasicMaterial({color: 0xff0000}));
@@ -83,21 +85,20 @@
             gimbalAxes.add(xLine, yLine, zLine);
             phoneGroup.add(gimbalAxes);
 
-            // Конус видимости для превью
-            const coneGeom = new THREE.ConeGeometry(0.3, 0.6, 12);
-            coneGeom.rotateX(-Math.PI / 2); // Смотрит вдоль оси Z
-            const coneMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6, wireframe: true });
+            // Конус (Helper)
+            const coneGeom = new THREE.ConeGeometry(0.3, 0.7, 16);
+            coneGeom.rotateX(-Math.PI / 2); 
+            const coneMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, wireframe: true });
             const previewCone = new THREE.Mesh(coneGeom, coneMat);
             phoneGroup.add(previewCone);
 
-            // Траектория
             trailGeometry = new THREE.BufferGeometry();
             const trailMaterial = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.6 });
             trailLine = new THREE.Line(trailGeometry, trailMaterial);
             scene.add(trailLine);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-            camera.position.set(2, 2, 4);
+            scene.add(new THREE.AmbientLight(0xffffff, 1));
+            camera.position.set(0, 0, 5);
             camera.lookAt(0,0,0);
             
             renderLoop();
@@ -107,7 +108,7 @@
             requestAnimationFrame(renderLoop);
             if (isRecording) {
                 const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(phoneGroup.quaternion);
-                trailPoints.push(forward.multiplyScalar(1.5));
+                trailPoints.push(forward.multiplyScalar(2));
                 if (trailPoints.length > MAX_TRAIL_POINTS) trailPoints.shift();
                 trailGeometry.setFromPoints(trailPoints);
             }
@@ -130,22 +131,28 @@
 
         function startTracking() {
             window.addEventListener('deviceorientation', (e) => {
-                const alpha = e.alpha ? THREE.MathUtils.degToRad(e.alpha) : 0;
-                const beta = e.beta ? THREE.MathUtils.degToRad(e.beta) : 0;
-                const gamma = e.gamma ? THREE.MathUtils.degToRad(e.gamma) : 0;
+                // Прямое преобразование Эйлера в Кватернион с защитой от Gimbal Lock
+                // Используем стандартный для мобильных устройств порядок ZXY
+                const alpha = e.alpha ? THREE.MathUtils.degToRad(e.alpha) : 0; // Вокруг Z
+                const beta = e.beta ? THREE.MathUtils.degToRad(e.beta) : 0;   // Вокруг X
+                const gamma = e.gamma ? THREE.MathUtils.degToRad(e.gamma) : 0; // Вокруг Y
+
                 const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
-                currentRawQuaternion.setFromEuler(euler);
+                currentQuaternion.setFromEuler(euler);
+                currentQuaternion.multiply(worldQuaternion); // Коррекция осей под Three.js
 
                 if (phoneGroup) {
                     if (isRecording) {
-                        let relativeQ = initialQuaternion.clone().invert().multiply(currentRawQuaternion);
+                        // Рассчитываем дельту от точки старта (Zero-Start)
+                        let relativeQ = initialQuaternion.clone().invert().multiply(currentQuaternion);
                         phoneGroup.quaternion.copy(relativeQ);
+                        
                         recordedData.push({
                             time: (performance.now() - startTime) / 1000,
                             q: relativeQ.clone()
                         });
                     } else {
-                        phoneGroup.quaternion.copy(currentRawQuaternion);
+                        phoneGroup.quaternion.copy(currentQuaternion);
                     }
                 }
             });
@@ -153,48 +160,46 @@
             recordBtn.disabled = false;
             recordBtn.classList.replace('bg-slate-700', 'bg-red-600');
             recordBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-            statusText.innerText = "Ready to track";
+            statusText.innerText = "Ready";
             initThree();
         }
 
         recordBtn.onclick = () => {
             if (!isRecording) {
-                initialQuaternion.copy(currentRawQuaternion);
+                initialQuaternion.copy(currentQuaternion);
                 isRecording = true;
                 recordedData = [];
                 trailPoints = [];
                 startTime = performance.now();
-                recordBtn.innerText = "Stop Recording";
+                recordBtn.innerText = "Stop";
                 recordBtn.classList.add('rec-active');
                 downloadBtn.classList.add('hidden');
-                statusText.innerText = "REC ● Recording...";
+                statusText.innerText = "Recording...";
             } else {
                 isRecording = false;
-                recordBtn.innerText = "Reset & Restart";
+                recordBtn.innerText = "Reset";
                 recordBtn.classList.remove('rec-active');
                 downloadBtn.classList.remove('hidden');
-                statusText.innerText = `Captured ${recordedData.length} frames`;
+                statusText.innerText = `Done: ${recordedData.length} pts`;
             }
         };
 
         downloadBtn.onclick = () => {
-            statusText.innerText = "Building GLB...";
+            statusText.innerText = "GLB Exporting...";
             const exportScene = new THREE.Scene();
             
-            // Группа для камеры (родитель)
             const cameraPivot = new THREE.Group();
             cameraPivot.name = "GyroCamera"; 
             exportScene.add(cameraPivot);
 
-            // Создаем визуальный помощник (Конус), который будет экспортирован
-            const coneGeometry = new THREE.ConeGeometry(0.2, 0.5, 8);
-            coneGeometry.rotateX(-Math.PI / 2); // Направляем конус по оси взгляда (Z)
-            const coneMaterial = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
+            // Финальный конус для Reconn 4D
+            const coneGeometry = new THREE.ConeGeometry(0.25, 0.6, 12);
+            coneGeometry.rotateX(-Math.PI / 2); 
+            const coneMaterial = new THREE.MeshStandardMaterial({ color: 0xffaa00, metalness: 0.5, roughness: 0.2 });
             const cameraHelper = new THREE.Mesh(coneGeometry, coneMaterial);
             cameraHelper.name = "CameraVisualGuide";
             cameraPivot.add(cameraHelper);
 
-            // Подготовка анимации вращения для Pivot
             const times = recordedData.map(d => d.time);
             const values = [];
             recordedData.forEach(d => {
@@ -202,7 +207,24 @@
             });
 
             const track = new THREE.QuaternionKeyframeTrack('GyroCamera.quaternion', times, values);
-            const clip = new THREE.AnimationClip('TrackAction', -1, [track]);
+            const clip = new THREE.AnimationClip('CameraTrack', -1, [track]);
+
+            const exporter = new THREE.GLTFExporter();
+            exporter.parse(exportScene, (result) => {
+                const blob = new Blob([result], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `gyro_fix_v22_${Date.now()}.glb`;
+                a.click();
+                statusText.innerText = "Saved!";
+            }, { binary: true, animations: [clip] });
+        };
+    </script>
+</body>
+</html>
+
+n', -1, [track]);
 
             const exporter = new THREE.GLTFExporter();
             exporter.parse(exportScene, (result) => {
