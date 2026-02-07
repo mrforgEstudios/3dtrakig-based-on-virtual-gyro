@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gyro Tracker to GLB</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #121212; color: white; font-family: sans-serif; }
+        .recording { animation: pulse 1.5s infinite; }
+        @keyframes pulse {
+            0% { background-color: #ef4444; }
+            50% { background-color: #7f1d1d; }
+            100% { background-color: #ef4444; }
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="text-center mb-8">
+        <h1 class="text-2xl font-bold mb-2">Gyro Tracker 📱</h1>
+        <p class="text-gray-400 text-sm">Запись вращения для Reconn 4D (glTF)</p>
+    </div>
+
+    <!-- Визуализация ориентации -->
+    <div id="canvas-container" class="w-64 h-64 bg-gray-800 rounded-xl mb-8 border border-gray-700 shadow-lg"></div>
+
+    <div class="flex flex-col gap-4 w-full max-w-xs">
+        <button id="startBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-lg transition-all">
+            Разрешить датчики
+        </button>
+        
+        <button id="recordBtn" disabled class="bg-gray-600 text-white font-bold py-4 px-6 rounded-lg opacity-50 cursor-not-allowed transition-all">
+            Начать запись
+        </button>
+
+        <button id="downloadBtn" disabled class="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-6 rounded-lg hidden transition-all">
+            Скачать .GLB
+        </button>
+    </div>
+
+    <div id="status" class="mt-6 text-sm text-gray-500 italic">Ожидание разрешений...</div>
+
+    <script>
+        let scene, camera, renderer, phoneMesh;
+        let isRecording = false;
+        let recordedData = [];
+        let startTime = 0;
+        const clock = new THREE.Clock();
+
+        // Инициализация Three.js для визуализации
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(256, 256);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Создаем модель "телефона"
+            const geometry = new THREE.BoxGeometry(1, 1.8, 0.1);
+            const material = new THREE.MeshStandardMaterial({ color: 0x3b82f6 });
+            phoneMesh = new THREE.Mesh(geometry, material);
+            scene.add(phoneMesh);
+
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(1, 1, 2);
+            scene.add(light);
+            scene.add(new THREE.AmbientLight(0x404040));
+
+            camera.position.z = 3;
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        const startBtn = document.getElementById('startBtn');
+        const recordBtn = document.getElementById('recordBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const status = document.getElementById('status');
+
+        // Запрос разрешений (нужен для iOS и последних Android)
+        startBtn.onclick = async () => {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const response = await DeviceOrientationEvent.requestPermission();
+                    if (response === 'granted') {
+                        setupTracker();
+                    }
+                } catch (e) {
+                    status.innerText = "Ошибка доступа к датчикам";
+                }
+            } else {
+                // Обычный Android
+                setupTracker();
+            }
+        };
+
+        function setupTracker() {
+            window.addEventListener('deviceorientation', handleOrientation);
+            startBtn.classList.add('hidden');
+            recordBtn.disabled = false;
+            recordBtn.classList.replace('bg-gray-600', 'bg-red-600');
+            recordBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            status.innerText = "Датчики активны. Готов к записи.";
+            initThree();
+        }
+
+        function handleOrientation(event) {
+            // Превращаем углы Эйлера в радианы
+            const alpha = event.alpha ? THREE.MathUtils.degToRad(event.alpha) : 0; // Z
+            const beta = event.beta ? THREE.MathUtils.degToRad(event.beta) : 0;   // X
+            const gamma = event.gamma ? THREE.MathUtils.degToRad(event.gamma) : 0; // Y
+
+            // В Three.js порядок вращения для устройств обычно YXZ или ZXY
+            phoneMesh.rotation.set(beta, alpha, -gamma, 'YXZ');
+
+            if (isRecording) {
+                const timestamp = (performance.now() - startTime) / 1000;
+                recordedData.push({
+                    time: timestamp,
+                    rotation: phoneMesh.quaternion.clone()
+                });
+            }
+        }
+
+        recordBtn.onclick = () => {
+            if (!isRecording) {
+                // Старт записи
+                isRecording = true;
+                recordedData = [];
+                startTime = performance.now();
+                recordBtn.innerText = "Остановить";
+                recordBtn.classList.add('recording');
+                downloadBtn.classList.add('hidden');
+                status.innerText = "Идет запись движений...";
+            } else {
+                // Стоп записи
+                isRecording = false;
+                recordBtn.innerText = "Начать заново";
+                recordBtn.classList.remove('recording');
+                downloadBtn.classList.remove('hidden');
+                status.innerText = `Записано ${recordedData.length} кадров.`;
+            }
+        };
+
+        downloadBtn.onclick = () => {
+            exportToGLB();
+        };
+
+        function exportToGLB() {
+            status.innerText = "Сборка файла...";
+            
+            // Создаем новую сцену для экспорта
+            const exportScene = new THREE.Scene();
+            const exportCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+            exportCamera.name = "TrackedCamera";
+            exportScene.add(exportCamera);
+
+            // Создаем анимацию
+            const times = recordedData.map(d => d.time);
+            const values = [];
+            recordedData.forEach(d => {
+                values.push(d.rotation.x, d.rotation.y, d.rotation.z, d.rotation.w);
+            });
+
+            const track = new THREE.QuaternionKeyframeTrack('TrackedCamera.quaternion', times, values);
+            const clip = new THREE.AnimationClip('CameraAction', -1, [track]);
+
+            const exporter = new THREE.GLTFExporter();
+            exporter.parse(exportScene, (gltf) => {
+                const blob = new Blob([JSON.stringify(gltf)], { type: 'application/json' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `camera_track_${Date.now()}.gltf`;
+                link.click();
+                status.innerText = "Готово! Импортируйте файл в Reconn 4D.";
+            }, { animations: [clip] });
+        }
+    </script>
+</body>
+</html>
+
