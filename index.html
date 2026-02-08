@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gyro to GLB Tracker</title>
+    <title>Motion Track Pro</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -15,59 +15,71 @@
             50% { transform: scale(1.05); box-shadow: 0 0 20px rgba(220, 38, 38, 0.5); }
             100% { transform: scale(1); }
         }
+        .btn-glass { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }
     </style>
 </head>
 <body class="flex flex-col items-center justify-between min-h-screen p-4">
 
     <div class="w-full text-center py-2">
-        <h1 class="text-2xl font-black tracking-tight text-blue-400 italic">GYRO TRACK V2.2</h1>
-        <p class="text-slate-500 text-[10px] uppercase tracking-widest">Fixed Diagonal Rotation & Helper</p>
+        <h1 class="text-2xl font-black tracking-tighter text-blue-400 italic uppercase">Motion Track Pro</h1>
+        <p class="text-slate-500 text-[10px] uppercase tracking-[0.2em]">High-Precision Gyro Export</p>
     </div>
 
+    <!-- 3D Viewport -->
     <div id="canvas-container" class="relative w-full flex-grow max-w-sm bg-slate-900 rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl my-4">
-        <div id="overlay" class="absolute inset-0 flex items-center justify-center text-slate-600 text-center p-8 pointer-events-none z-10 text-sm">
-            Нажмите "Активировать" для калибровки
+        <div id="overlay" class="absolute inset-0 flex items-center justify-center text-slate-500 text-center p-8 pointer-events-none z-10 text-xs uppercase tracking-widest">
+            Tap "Initialize" to Start
         </div>
+        <!-- Reset Button (Floating) -->
+        <button id="zeroBtn" class="hidden absolute top-4 right-4 z-20 btn-glass text-white text-[10px] font-bold py-2 px-4 rounded-full uppercase tracking-wider active:scale-90 transition-all">
+            Set Zero
+        </button>
     </div>
 
+    <!-- Controls -->
     <div id="ui-controls" class="w-full max-w-xs space-y-3 mb-4">
-        <button id="startBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95">
-            1. Активировать датчики
+        <button id="startBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95 uppercase tracking-wider text-sm">
+            Initialize Sensors
         </button>
         
-        <button id="recordBtn" disabled class="w-full bg-slate-700 text-slate-400 font-bold py-4 rounded-2xl opacity-50 cursor-not-allowed transition-all">
-            2. Начать запись
+        <button id="recordBtn" disabled class="w-full bg-slate-800 text-slate-500 font-bold py-4 rounded-2xl opacity-50 cursor-not-allowed transition-all uppercase tracking-wider text-sm">
+            Start Recording
         </button>
 
-        <button id="downloadBtn" class="hidden w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-2xl shadow-xl transition-all active:scale-95">
-            3. Сохранить .GLB
+        <button id="downloadBtn" class="hidden w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-2xl shadow-xl transition-all active:scale-95 uppercase tracking-wider text-sm">
+            Download .GLB
         </button>
     </div>
 
+    <!-- Footer Status -->
     <div id="status-bar" class="w-full bg-slate-950 p-3 rounded-t-2xl border-t border-slate-800 text-center">
-        <span id="status-text" class="text-[10px] text-slate-500 uppercase font-bold tracking-widest italic">Standby</span>
+        <span id="status-text" class="text-[9px] text-slate-500 uppercase font-black tracking-[0.3em]">System Standby</span>
     </div>
 
     <script>
-        let scene, camera, renderer, phoneGroup, gimbalAxes;
+        let scene, camera, renderer, phoneGroup;
         let trailLine, trailGeometry;
         let isRecording = false;
         let recordedData = [];
         let startTime = 0;
         
-        // Математика для стабилизации
-        let initialQuaternion = new THREE.Quaternion();
-        let currentQuaternion = new THREE.Quaternion();
-        const worldQuaternion = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // Поворот для выравнивания осей устройства с миром Three.js
-
-        const MAX_TRAIL_POINTS = 100;
+        // Math for stabilization and offsets
+        let currentRawQ = new THREE.Quaternion();
+        let offsetQ = new THREE.Quaternion(); // For the "Set Zero" feature
+        let recordStartOffsetQ = new THREE.Quaternion(); // For the animation start offset
+        
+        const worldCorrectionQ = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+        const MAX_TRAIL_POINTS = 120;
         let trailPoints = [];
 
         function initThree() {
             document.getElementById('overlay').style.display = 'none';
+            document.getElementById('zeroBtn').classList.remove('hidden');
+            
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            
             const container = document.getElementById('canvas-container');
             const size = Math.min(container.clientWidth, container.clientHeight);
             renderer.setSize(size, size);
@@ -76,29 +88,28 @@
             phoneGroup = new THREE.Group();
             scene.add(phoneGroup);
 
-            // Визуальный гимбал
-            gimbalAxes = new THREE.Group();
+            // Visual Helpers
             const axisLength = 1.2;
-            const xLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(axisLength,0,0)]), new THREE.LineBasicMaterial({color: 0xff0000}));
-            const yLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,axisLength,0)]), new THREE.LineBasicMaterial({color: 0x00ff00}));
-            const zLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,axisLength)]), new THREE.LineBasicMaterial({color: 0x0000ff}));
-            gimbalAxes.add(xLine, yLine, zLine);
-            phoneGroup.add(gimbalAxes);
+            const xLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(axisLength,0,0)]), new THREE.LineBasicMaterial({color: 0xff4444}));
+            const yLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,axisLength,0)]), new THREE.LineBasicMaterial({color: 0x44ff44}));
+            const zLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,axisLength)]), new THREE.LineBasicMaterial({color: 0x4444ff}));
+            phoneGroup.add(xLine, yLine, zLine);
 
-            // Конус (Helper)
-            const coneGeom = new THREE.ConeGeometry(0.3, 0.7, 16);
+            // View Cone (Camera Guide)
+            const coneGeom = new THREE.ConeGeometry(0.3, 0.8, 16);
             coneGeom.rotateX(-Math.PI / 2); 
-            const coneMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, wireframe: true });
+            const coneMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, wireframe: true, transparent: true, opacity: 0.5 });
             const previewCone = new THREE.Mesh(coneGeom, coneMat);
             phoneGroup.add(previewCone);
 
+            // Motion Trail
             trailGeometry = new THREE.BufferGeometry();
-            const trailMaterial = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.6 });
+            const trailMaterial = new THREE.LineBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.4 });
             trailLine = new THREE.Line(trailGeometry, trailMaterial);
             scene.add(trailLine);
 
             scene.add(new THREE.AmbientLight(0xffffff, 1));
-            camera.position.set(0, 0, 5);
+            camera.position.set(0, 0, 6);
             camera.lookAt(0,0,0);
             
             renderLoop();
@@ -106,9 +117,14 @@
 
         function renderLoop() {
             requestAnimationFrame(renderLoop);
+            
+            // Calculate current stabilized rotation with offset
+            let stabilizedQ = offsetQ.clone().invert().multiply(currentRawQ);
+            phoneGroup.quaternion.copy(stabilizedQ);
+
             if (isRecording) {
                 const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(phoneGroup.quaternion);
-                trailPoints.push(forward.multiplyScalar(2));
+                trailPoints.push(forward.multiplyScalar(2.5));
                 if (trailPoints.length > MAX_TRAIL_POINTS) trailPoints.shift();
                 trailGeometry.setFromPoints(trailPoints);
             }
@@ -117,6 +133,7 @@
 
         const startBtn = document.getElementById('startBtn');
         const recordBtn = document.getElementById('recordBtn');
+        const zeroBtn = document.getElementById('zeroBtn');
         const downloadBtn = document.getElementById('downloadBtn');
         const statusText = document.getElementById('status-text');
 
@@ -131,76 +148,104 @@
 
         function startTracking() {
             window.addEventListener('deviceorientation', (e) => {
-                // Прямое преобразование Эйлера в Кватернион с защитой от Gimbal Lock
-                // Используем стандартный для мобильных устройств порядок ZXY
-                const alpha = e.alpha ? THREE.MathUtils.degToRad(e.alpha) : 0; // Вокруг Z
-                const beta = e.beta ? THREE.MathUtils.degToRad(e.beta) : 0;   // Вокруг X
-                const gamma = e.gamma ? THREE.MathUtils.degToRad(e.gamma) : 0; // Вокруг Y
+                const alpha = e.alpha ? THREE.MathUtils.degToRad(e.alpha) : 0;
+                const beta = e.beta ? THREE.MathUtils.degToRad(e.beta) : 0;
+                const gamma = e.gamma ? THREE.MathUtils.degToRad(e.gamma) : 0;
 
                 const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
-                currentQuaternion.setFromEuler(euler);
-                currentQuaternion.multiply(worldQuaternion); // Коррекция осей под Three.js
-
-                if (phoneGroup) {
-                    if (isRecording) {
-                        // Рассчитываем дельту от точки старта (Zero-Start)
-                        let relativeQ = initialQuaternion.clone().invert().multiply(currentQuaternion);
-                        phoneGroup.quaternion.copy(relativeQ);
-                        
-                        recordedData.push({
-                            time: (performance.now() - startTime) / 1000,
-                            q: relativeQ.clone()
-                        });
-                    } else {
-                        phoneGroup.quaternion.copy(currentQuaternion);
-                    }
-                }
+                currentRawQ.setFromEuler(euler);
+                currentRawQ.multiply(worldCorrectionQ);
             });
+
             startBtn.classList.add('hidden');
             recordBtn.disabled = false;
-            recordBtn.classList.replace('bg-slate-700', 'bg-red-600');
+            recordBtn.classList.replace('bg-slate-800', 'bg-red-600');
             recordBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-            statusText.innerText = "Ready";
+            statusText.innerText = "System Ready";
             initThree();
         }
 
+        // Set Zero Button Logic
+        zeroBtn.onclick = () => {
+            offsetQ.copy(currentRawQ);
+            statusText.innerText = "Orientation Reset";
+            setTimeout(() => { if(!isRecording) statusText.innerText = "Ready"; }, 1500);
+        };
+
         recordBtn.onclick = () => {
             if (!isRecording) {
-                initialQuaternion.copy(currentQuaternion);
+                // Fix orientation for the start of the file
+                recordStartOffsetQ.copy(currentRawQ);
+                
                 isRecording = true;
                 recordedData = [];
                 trailPoints = [];
                 startTime = performance.now();
-                recordBtn.innerText = "Stop";
+                
+                recordBtn.innerText = "Stop Record";
                 recordBtn.classList.add('rec-active');
                 downloadBtn.classList.add('hidden');
-                statusText.innerText = "Recording...";
+                statusText.innerText = "Recording Activity...";
             } else {
                 isRecording = false;
-                recordBtn.innerText = "Reset";
+                recordBtn.innerText = "New Session";
                 recordBtn.classList.remove('rec-active');
                 downloadBtn.classList.remove('hidden');
-                statusText.innerText = `Done: ${recordedData.length} pts`;
+                statusText.innerText = `Session Saved (${recordedData.length} samples)`;
             }
         };
 
+        // Every time orientation changes, if recording, save relative data
+        setInterval(() => {
+            if (isRecording) {
+                let relativeQ = recordStartOffsetQ.clone().invert().multiply(currentRawQ);
+                recordedData.push({
+                    time: (performance.now() - startTime) / 1000,
+                    q: relativeQ.clone()
+                });
+            }
+        }, 16); // ~60fps capture
+
         downloadBtn.onclick = () => {
-            statusText.innerText = "GLB Exporting...";
+            statusText.innerText = "Compiling GLB...";
             const exportScene = new THREE.Scene();
             
             const cameraPivot = new THREE.Group();
-            cameraPivot.name = "GyroCamera"; 
+            cameraPivot.name = "MotionCamera"; 
             exportScene.add(cameraPivot);
 
-            // Финальный конус для Reconn 4D
+            // Export Visual Guide
             const coneGeometry = new THREE.ConeGeometry(0.25, 0.6, 12);
             coneGeometry.rotateX(-Math.PI / 2); 
-            const coneMaterial = new THREE.MeshStandardMaterial({ color: 0xffaa00, metalness: 0.5, roughness: 0.2 });
+            const coneMaterial = new THREE.MeshStandardMaterial({ color: 0x3b82f6, metalness: 0.8, roughness: 0.2 });
             const cameraHelper = new THREE.Mesh(coneGeometry, coneMaterial);
-            cameraHelper.name = "CameraVisualGuide";
+            cameraHelper.name = "OrientationHelper";
             cameraPivot.add(cameraHelper);
 
             const times = recordedData.map(d => d.time);
+            const values = [];
+            recordedData.forEach(d => {
+                values.push(d.q.x, d.q.y, d.q.z, d.q.w);
+            });
+
+            const track = new THREE.QuaternionKeyframeTrack('MotionCamera.quaternion', times, values);
+            const clip = new THREE.AnimationClip('CameraAnimation', -1, [track]);
+
+            const exporter = new THREE.GLTFExporter();
+            exporter.parse(exportScene, (result) => {
+                const blob = new Blob([result], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `motion_track_${Date.now()}.glb`;
+                a.click();
+                statusText.innerText = "Export Successful";
+            }, { binary: true, animations: [clip] });
+        };
+    </script>
+</body>
+</html>
+
             const values = [];
             recordedData.forEach(d => {
                 values.push(d.q.x, d.q.y, d.q.z, d.q.w);
